@@ -1,16 +1,52 @@
-# TODO:выкидваю первую звёздочку - флаг сумки
-# TODO:отрезать looted by / crafted by в отдельную ячейку
-# TODO:если первый символ число - отрезать количество
-# TODO:" charges: N" - доставать количество зарядов
-# TODO:разделять поломку и максимальную durability
-# TODO:получать цвет и число зарядов для краски "dying tub ("
-
 import requests
 from bs4 import BeautifulSoup
 from http import HTTPStatus
+import re
 import logging
 
 vendors_url = "http://uo.theabyss.ru/?vendors"
+
+
+def get_craft(s, pattern):
+    str_pos = s.find(pattern)
+    if str_pos != -1:
+        return s[:str_pos], s[str_pos + len(pattern):]
+    else:
+        return s, None
+
+
+def get_amount(s):
+    first_word = s.split()[0]
+    if first_word.isnumeric():
+        return s[len(first_word) + 1:], int(first_word)
+    return s, None
+
+
+def get_charges(s):
+    # "magic cloak of the abyss [Greater Heal charges: 10]"
+    regex = re.search(r'magic (robe|cloak) of the abyss \[([\w\s]+) charges: (\d+)\]', s)
+    if regex:
+        return regex.groups()[1] + ' ' + regex.groups()[0], int(regex.groups()[2])
+
+    # "glacial staff. charges: 21"
+    regex = re.search(r'(.+) charges: (\d+)', s)
+    if regex:
+        return regex.groups()[0], int(regex.groups()[1])
+
+    # "dying tub (006f0 color 2 charges)"
+    regex = re.search(r'dying tub \((?:(?P<color>[\d\w]+) color )?(?P<charges>[\d]+) charges\)', s)
+    if regex:
+        return ('dying tub' + ' ' + (regex.group('color') or '')).strip(), int(regex.group('charges'))
+
+    return s, None
+
+
+def get_durability(s):
+    if s != '---' or '/' in s:
+        current, maximum = s.split('/')
+        if current.isnumeric() and maximum.isnumeric():
+            return int(current), int(maximum)
+    return None, None
 
 
 def get_vendors():
@@ -40,12 +76,32 @@ def get_goods():
                     good_row = [f.string for f in good.find_all('td') if 'vendor_name' not in f.attrs.get('class', [])]
                     if len(good_row) != 3:
                         continue
+                    good_name = str(good_row[0])
+
+                    is_bag = good_name[0] == '*'
+                    good_name = good_name.lstrip('* ')
+                    good_name, crafted_by = get_craft(good_name, ' crafted by ')
+                    good_name, looted_by = get_craft(good_name, ' looted by ')
+                    good_name, amount = get_amount(good_name)
+                    good_name, charges = get_charges(good_name)
+
+                    price_str = str(good_row[1]).replace(' ', '')
+                    price = int(price_str) if price_str.isnumeric() else None
+
+                    durability, max_durability = get_durability(str(good_row[2]))
+
                     yield {
                         'vendor_id': vendor['vendor_id'],
                         'vendor_name': vendor['vendor_name'],
-                        'good_name': str(good_row[0]),
-                        'good_price': str(good_row[1]),
-                        'good_state': str(good_row[2]),
+                        'good_name': good_name.lstrip('* '),
+                        'good_price': str(price),
+                        'durability': str(durability),
+                        'max_durability': str(max_durability),
+                        'is_bag': str(is_bag),
+                        'crafted_by': crafted_by or '',
+                        'looted_by': looted_by or '',
+                        'amount': str(amount),
+                        'charges': str(charges)
                     }
 
 
